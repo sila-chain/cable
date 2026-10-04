@@ -1,0 +1,66 @@
+# Cable: CMake Bootstrap Library.
+# Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+# Bootstraps a project with Cable and builds it: build type, compiler settings,
+# build info library, toolchain and archive package.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project/cmake/cable
+
+      - name: Write the test project
+        working-directory: project
+        run: |
+          cat > CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          include(cmake/cable/bootstrap.cmake)
+          include(CableBuildInfo)
+          include(CableBuildType)
+          include(CableCompilerSettings)
+          include(CablePackage)
+          include(CableToolchains)
+          include(defaults/HunterCacheServers)
+          cable_configure_toolchain(DEFAULT cxx17)
+          cable_set_build_type(DEFAULT Release CONFIGURATION_TYPES Release Debug)
+          project(cabletest LANGUAGES C CXX VERSION 1.2.3)
+          cable_configure_compiler()
+          cable_add_buildinfo_library(PROJECT_NAME cabletest)
+          add_executable(app main.cpp)
+          target_link_libraries(app PRIVATE cabletest-buildinfo)
+          install(TARGETS app)
+          cable_add_archive_package()
+          message(STATUS "HUNTER_CACHE_SERVERS: ${HUNTER_CACHE_SERVERS}")
+          CMAKE
+          cat > main.cpp <<'CPP'
+          #include <cabletest/buildinfo.h>
+          #include <cstdio>
+          int main()
+          {
+              const auto* info = cabletest_get_buildinfo();
+              std::printf("%s %s\n", info->project_name, info->project_version);
+          }
+          CPP
+
+      - name: Configure, build, run and package
+        working-directory: project
+        run: |
+          cmake -S . -B build 2>&1 | tee configure.log
+          grep -q 'HUNTER_CACHE_SERVERS: https://github.com/ingenue/hunter-cache$' configure.log
+          cmake --build build
+          build/app | tee run.log
+          grep -q '^cabletest 1.2.3$' run.log
+          cmake --build build --target package
+          ls build/cabletest-*
